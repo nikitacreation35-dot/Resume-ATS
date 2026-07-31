@@ -1,6 +1,3 @@
-I apologize! Let's get you the exact raw README text file code without any extra markdown formatting wrappers or conversational fluff so you can cleanly copy and paste it into GitHub.
-
-Here is the exact raw content:
 
 ```markdown
 # 🤖 Smart ATS Resume Copilot
