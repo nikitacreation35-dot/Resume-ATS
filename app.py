@@ -6,7 +6,7 @@ import ssl
 import nltk
 import uvicorn
 import google.generativeai as genai
-import markdown # Optional: if you want to render the LLM output nicely, though we'll use a simple `<pre>` tag below for ease
+# import markdown  <-- Commented out to prevent ModuleNotFoundError on Render
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 from sklearn.feature_extraction.text import TfidfVectorizer
