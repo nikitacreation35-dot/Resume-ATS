@@ -5,14 +5,28 @@ import re
 import ssl
 import nltk
 import uvicorn
+import google.generativeai as genai
+import markdown # Optional: if you want to render the LLM output nicely, though we'll use a simple `<pre>` tag below for ease
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ==========================================
-# 🟢 CODE CHANGES: ROBUST NLTK DOWNLOAD & SSL FIX FOR RENDER
-# Bypasses Linux SSL verification blocks and downloads required NLTK assets safely
+# 🟢 AI CONFIGURATION
+# ==========================================
+# This reads the API key from Render's Environment Variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    # Using the faster flash model for web requests
+    model = genai.GenerativeModel('gemini-1.5-flash') 
+else:
+    model = None
+    print("Warning: GEMINI_API_KEY not found. AI suggestions will be disabled.")
+
+# ==========================================
+# 🟢 ROBUST NLTK DOWNLOAD & SSL FIX
 # ==========================================
 try:
     _create_unverified_https_context = ssl._create_unverified_context
@@ -60,6 +74,34 @@ def find_missing_keywords(resume_text: str, job_text: str):
     resume_skills = [skill for skill in SKILL_DB if skill in resume_text.lower()]
     return list(set(job_skills) - set(resume_skills))
 
+def suggest_resume_edits(resume_text: str, missing_skills: list):
+    """Uses LLM to rewrite the resume incorporating missing skills naturally."""
+    if not model:
+        return "AI suggestions are disabled. Please configure GEMINI_API_KEY."
+    if not missing_skills:
+        return "Great job! Your resume already contains all the key skills from the job description."
+
+    skills_str = ", ".join(missing_skills)
+    prompt = f"""
+    You are an expert ATS resume optimizer. 
+    I have a candidate's resume and a list of missing skills required by a job description.
+    
+    Missing Skills: {skills_str}
+    
+    Original Resume:
+    {resume_text}
+    
+    Task: 
+    Rewrite parts of this resume to naturally incorporate the missing skills. 
+    Do not just list them at the bottom. Suggest realistic bullet points or summary additions that make sense based on the candidate's existing experience. Format your response clearly.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Error generating suggestions: {str(e)}"
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
@@ -72,7 +114,7 @@ def home():
     <body class="bg-slate-900 text-white min-h-screen p-8">
         <div class="max-w-4xl mx-auto">
             <h1 class="text-3xl font-bold mb-2 text-cyan-400">🤖 Smart ATS Resume Copilot</h1>
-            <p class="text-slate-400 mb-8">Analyze candidate resumes against job descriptions using NLP & TF-IDF.</p>
+            <p class="text-slate-400 mb-8">Analyze and auto-enhance resumes using NLP & AI.</p>
             
             <form action="/analyze" method="post" class="space-y-6">
                 <div>
@@ -83,7 +125,7 @@ def home():
                     <label class="block text-sm font-medium mb-2 text-slate-300">Paste Job Description</label>
                     <textarea name="job_text" rows="5" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500" required></textarea>
                 </div>
-                <button type="submit" class="w-full bg-cyan-500 hover:bg-cyan-600 font-semibold py-3 px-6 rounded-lg transition duration-200">Run ATS Analysis</button>
+                <button type="submit" class="w-full bg-cyan-500 hover:bg-cyan-600 font-semibold py-3 px-6 rounded-lg transition duration-200">Run ATS Analysis & Get AI Edits</button>
             </form>
         </div>
     </body>
@@ -95,15 +137,18 @@ def analyze(resume_text: str = Form(...), job_text: str = Form(...)):
     entities = extract_entities(resume_text)
     score = calculate_match_score(resume_text, job_text)
     missing_skills = find_missing_keywords(resume_text, job_text)
+    
+    # Generate the AI edits
+    ai_suggestions = suggest_resume_edits(resume_text, missing_skills)
 
-    skills_badge = "".join([f'<span class="bg-cyan-900 text-cyan-300 px-3 py-1 rounded-full text-xs font-semibold mr-2">{s}</span>' for s in entities["skills"]])
-    missing_badge = "".join([f'<span class="bg-rose-900 text-rose-300 px-3 py-1 rounded-full text-xs font-semibold mr-2">{s}</span>' for s in missing_skills])
+    skills_badge = "".join([f'<span class="bg-cyan-900 text-cyan-300 px-3 py-1 rounded-full text-xs font-semibold mr-2 mb-2 inline-block">{s}</span>' for s in entities["skills"]])
+    missing_badge = "".join([f'<span class="bg-rose-900 text-rose-300 px-3 py-1 rounded-full text-xs font-semibold mr-2 mb-2 inline-block">{s}</span>' for s in missing_skills])
 
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>ATS Results</title>
+        <title>ATS Results & Edits</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-slate-900 text-white min-h-screen p-8">
@@ -124,26 +169,31 @@ def analyze(resume_text: str = Form(...), job_text: str = Form(...)):
                     <p class="text-sm text-slate-400"><strong>Phone:</strong> {entities['phone']}</p>
                     <div class="pt-2">
                         <p class="text-sm text-slate-400 mb-2"><strong>Extracted Skills:</strong></p>
-                        <div class="flex flex-wrap gap-2">{skills_badge or '<span class="text-slate-500">None detected</span>'}</div>
+                        <div class="flex flex-wrap">{skills_badge or '<span class="text-slate-500">None detected</span>'}</div>
                     </div>
                 </div>
 
                 <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-3">
                     <h3 class="text-lg font-bold text-rose-400">Missing Required Skills</h3>
                     <p class="text-xs text-slate-400">Skills in JD missing from Resume:</p>
-                    <div class="flex flex-wrap gap-2 pt-2">{missing_badge or '<span class="text-emerald-400 text-sm">None! All matching.</span>'}</div>
+                    <div class="flex flex-wrap pt-2">{missing_badge or '<span class="text-emerald-400 text-sm">None! All matching.</span>'}</div>
                 </div>
             </div>
+            
+            <!-- NEW AI SUGGESTIONS SECTION -->
+            <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-3">
+                <h3 class="text-xl font-bold text-emerald-400 flex items-center gap-2">✨ AI Suggested Resume Edits</h3>
+                <p class="text-sm text-slate-400 mb-4">How to naturally weave the missing skills into your existing experience:</p>
+                <div class="bg-slate-900 p-4 rounded-lg border border-slate-700 overflow-x-auto">
+                    <pre class="text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">{ai_suggestions}</pre>
+                </div>
+            </div>
+            
         </div>
     </body>
     </html>
     """
 
-# ==========================================
-# 🟢 CODE CHANGES: RENDER PRODUCTION ENTRYPOINT
-# Directly binds the app instance to host 0.0.0.0 and reads Render's assigned $PORT env var
-# ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-# ==========================================
