@@ -5,7 +5,7 @@ import re
 import ssl
 import nltk
 import uvicorn
-import google.generativeai as genai
+from groq import Groq
 # import markdown  <-- Commented out to prevent ModuleNotFoundError on Render
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
@@ -13,18 +13,15 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ==========================================
-# 🟢 AI CONFIGURATION
+# 🟢 AI CONFIGURATION (GROQ)
 # ==========================================
-# This reads the API key from Render's Environment Variables
-GEMINI_API_KEY = os.environ.get("GROQ_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    # Using the faster flash model for web requests
-    model = genai.GenerativeModel('gemini-2.5-flash')
-     
+# This reads the Groq API key from Render's Environment Variables
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+if GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
 else:
-    model = None
-    print("Warning: GEMINI_API_KEY not found. AI suggestions will be disabled.")
+    groq_client = None
+    print("Warning: GROQ_API_KEY not found. AI suggestions will be disabled.")
 
 # ==========================================
 # 🟢 ROBUST NLTK DOWNLOAD & SSL FIX
@@ -76,9 +73,9 @@ def find_missing_keywords(resume_text: str, job_text: str):
     return list(set(job_skills) - set(resume_skills))
 
 def suggest_resume_edits(resume_text: str, missing_skills: list):
-    """Uses LLM to rewrite the resume incorporating missing skills naturally."""
-    if not model:
-        return "AI suggestions are disabled. Please configure GEMINI_API_KEY."
+    """Uses Groq's LLM to rewrite the resume incorporating missing skills naturally."""
+    if not groq_client:
+        return "AI suggestions are disabled. Please configure GROQ_API_KEY."
     if not missing_skills:
         return "Great job! Your resume already contains all the key skills from the job description."
 
@@ -98,8 +95,14 @@ def suggest_resume_edits(resume_text: str, missing_skills: list):
     """
     
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+        )
+        return completion.choices[0].message.content
     except Exception as e:
         return f"Error generating suggestions: {str(e)}"
 
@@ -139,7 +142,7 @@ def analyze(resume_text: str = Form(...), job_text: str = Form(...)):
     score = calculate_match_score(resume_text, job_text)
     missing_skills = find_missing_keywords(resume_text, job_text)
     
-    # Generate the AI edits
+    # Generate the AI edits using Groq
     ai_suggestions = suggest_resume_edits(resume_text, missing_skills)
 
     skills_badge = "".join([f'<span class="bg-cyan-900 text-cyan-300 px-3 py-1 rounded-full text-xs font-semibold mr-2 mb-2 inline-block">{s}</span>' for s in entities["skills"]])
